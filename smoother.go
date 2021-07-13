@@ -9,18 +9,21 @@ type Method int
 const (
 	Exponential Method = iota
 	DoubleExponential
+	FilterFIR
 )
 
 type Smoother struct {
-	state        float64
-	coefficients interface{}
-	method       Method
-	t            int
+	state         float64
+	initialState  float64
+	previousState interface{}
+	coefficients  interface{}
+	method        Method
+	t             int
 }
 
 /*
 A Smoother must not be created and used without initialised with MakeSmoother
- */
+*/
 func MakeSmoother(method Method, coefficients interface{}, initialState float64) *Smoother {
 	t := 0
 	if !math.IsNaN(initialState) {
@@ -29,11 +32,16 @@ func MakeSmoother(method Method, coefficients interface{}, initialState float64)
 	switch method {
 	case Exponential:
 		if v, ok := coefficients.(float64); ok {
-			return &Smoother{state: initialState, coefficients: v, t: t, method: method}
+			return &Smoother{state: initialState, initialState: initialState, t: t, method: method, coefficients: v}
 		}
 	case DoubleExponential:
 		if v, ok := coefficients.([2]float64); ok {
-			return &Smoother{state: initialState, coefficients: [3]float64{v[0], v[1], 0}, t: t, method: method}
+			return &Smoother{state: initialState, initialState: initialState, t: t, method: method, coefficients: [3]float64{v[0], v[1], 0}}
+		}
+	case FilterFIR:
+		if v, ok := coefficients.([]float64); ok {
+			N := len(v)
+			return &Smoother{state: initialState, initialState: initialState, t: t, method: method, coefficients: coefficients, previousState: make([]float64, N)}
 		}
 	}
 	return nil
@@ -44,16 +52,31 @@ func (s *Smoother) Get() float64 {
 }
 
 func (s *Smoother) Reset() {
+	s.ResetWithState(s.initialState)
+}
+func (s *Smoother) ResetWithState(initialState float64) {
 	s.t = 0
+	s.state = initialState
+
+	// Reset previous state buffer
+	if ps, ok := s.previousState.([]float64); ok {
+		for i := range ps {
+			ps[i] = 0.0
+		}
+	}
 }
 
 func (s *Smoother) Next(x float64) float64 {
-	switch s.method {
-	case Exponential:
-		s.exponentialNext(x)
-	case DoubleExponential:
-		s.doubleExponentialNext(x)
+	nextMethods := map[Method]interface{}{
+		Exponential:       s.exponentialNext,
+		DoubleExponential: s.doubleExponentialNext,
+		FilterFIR:         s.filterFirNext,
 	}
+
+	if f, ok := nextMethods[s.method]; ok {
+		f.(func(float64) float64)(x)
+	}
+
 	s.t++
 	return s.state
 }
@@ -91,5 +114,26 @@ func (s *Smoother) doubleExponentialNext(x float64) float64 {
 		b = beta*(s.state-previousState) + (1-beta)*b
 	}
 	s.coefficients = [3]float64{alpha, beta, b}
+	return s.state
+}
+
+func (s *Smoother) filterFirNext(x float64) float64 {
+	coefficients := s.coefficients.([]float64)
+	ps := s.previousState.([]float64)
+
+	// Update previousSate buffer
+	for i := len(ps) - 1; i > 0; i-- {
+		ps[i] = ps[i-1]
+	}
+	ps[0] = x
+
+	// Apply coefficients
+	value := 0.0
+	for i, c := range coefficients {
+		value += ps[i] * c
+	}
+
+	// Update state and return
+	s.state = value
 	return s.state
 }
