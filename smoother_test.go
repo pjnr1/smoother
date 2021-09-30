@@ -30,3 +30,18 @@ func TestFilterFir_GetAndNext(t *testing.T) {
 		}
 	}
 }
+
+func TestMultipleInstances(t *testing.T) {
+	s1 := MakeSmoother(Exponential, 0.5, 0.0)
+	s2 := MakeSmoother(Exponential, 0.5, 1.0)
+
+	for i := 1; i < 10; i++ {
+		s1.Next(float64(i))
+		s2.Next(float64(i))
+	}
+
+	if s1.Get() == s2.Get() {
+		t.Error("Values should not be equal!")
+	}
+
+}
